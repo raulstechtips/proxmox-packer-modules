@@ -271,6 +271,11 @@ build {
         destination = "/tmp/terraform_install.sh"
     }
 
+    provisioner "file" {
+        source = "files/scripts/pam_users.sh"
+        destination = "/tmp/pam_users.sh"
+    }
+
     provisioner "shell" {
         inline = [ 
             "chmod +x /tmp/docker_install.sh",
@@ -289,6 +294,13 @@ build {
         inline = [ 
             "chmod +x /tmp/terraform_install.sh",
             "sudo /tmp/terraform_install.sh" 
+        ]
+    }
+
+    provisioner "shell" {
+        inline = [
+            "chmod +x /tmp/pam_users.sh",
+            "sudo /tmp/pam_users.sh"
         ]
     }
 
