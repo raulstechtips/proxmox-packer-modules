@@ -290,6 +290,11 @@ build {
         destination = "/tmp/infisical_ca.pub"
     }
 
+    provisioner "file" {
+        source = "files/scripts/sshd_lockdown.sh"
+        destination = "/tmp/sshd_lockdown.sh"
+    }
+
     provisioner "shell" {
         inline = [ 
             "chmod +x /tmp/docker_install.sh",
@@ -325,9 +330,12 @@ build {
         ]
     }
 
-    # Template Cleanup
+    # Lock down sshd, then clean up the template. This must stay the last
+    # provisioner: after sshd_lockdown.sh, a new login with the build key fails.
     provisioner "shell" {
         inline = [
+            "chmod +x /tmp/sshd_lockdown.sh",
+            "sudo /tmp/sshd_lockdown.sh",
             "echo 'Starting template clean up'",
             "sudo rm /etc/ssh/ssh_host_*",
             "sudo truncate -s 0 /etc/machine-id",
