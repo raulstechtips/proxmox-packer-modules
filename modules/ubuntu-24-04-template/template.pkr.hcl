@@ -71,6 +71,10 @@ variable "build_ssh_private_key_file" {
   type      = string
   sensitive = true
 }
+
+variable "automation_ca_public_key" {
+  type = string
+}
 ######################################################################################################
 ######################################################################################################
 
@@ -276,6 +280,16 @@ build {
         destination = "/tmp/pam_users.sh"
     }
 
+    provisioner "file" {
+        source = "files/scripts/automation_ca.sh"
+        destination = "/tmp/automation_ca.sh"
+    }
+
+    provisioner "file" {
+        content = "${var.automation_ca_public_key}\n"
+        destination = "/tmp/infisical_ca.pub"
+    }
+
     provisioner "shell" {
         inline = [ 
             "chmod +x /tmp/docker_install.sh",
@@ -301,6 +315,13 @@ build {
         inline = [
             "chmod +x /tmp/pam_users.sh",
             "sudo /tmp/pam_users.sh"
+        ]
+    }
+
+    provisioner "shell" {
+        inline = [
+            "chmod +x /tmp/automation_ca.sh",
+            "sudo /tmp/automation_ca.sh"
         ]
     }
 
