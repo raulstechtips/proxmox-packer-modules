@@ -1,0 +1,4 @@
+# This repository is public. Do not commit template values or private keys.
+*.pkrvars.hcl
+*id_rsa
+*id_ed25519
