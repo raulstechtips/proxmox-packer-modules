@@ -1,4 +1,4 @@
-# vm-pmx-hl-template-base
+# ubuntu-24-04-template
 # ---
 # Packer Template to create an Ubuntu Server (jammy) on Proxmox
 
