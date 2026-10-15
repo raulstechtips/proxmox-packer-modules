@@ -63,12 +63,13 @@ variable "http_bind_port" {
     type = string
 }
 
-variable "ssh_username" {
-    type = string
+variable "build_ssh_public_key" {
+  type = string
 }
 
-variable "ssh_private_key_file" {
-    type = string
+variable "build_ssh_private_key_file" {
+  type      = string
+  sensitive = true
 }
 ######################################################################################################
 ######################################################################################################
@@ -141,19 +142,19 @@ source "proxmox-iso" "vm-template" {
     boot_wait = "5s"
 
     # PACKER Autoinstall Settings
-    http_directory = "http" 
+    http_content = {
+      "/user-data" = templatefile("${path.root}/http/user-data.pkrtpl.hcl", {
+        build_ssh_public_key = var.build_ssh_public_key
+      })
+      "/meta-data" = ""
+    }
     # (Optional) Bind IP Address and Port
     http_bind_address = "0.0.0.0"
     http_port_min = "${var.http_bind_port}"
     http_port_max = "${var.http_bind_port}"
 
-    ssh_username = "${var.ssh_username}"
-
-    # (Option 2) Add your Private SSH KEY file here
-
-    # Use Docker to spin up the run file where the ssh key gets created in docker and then once the provisioning is done
-    # we discard the docker deleting keys, making this secure
-    ssh_private_key_file = "${var.ssh_private_key_file}"
+    ssh_username         = "automation"
+    ssh_private_key_file = var.build_ssh_private_key_file
 
     # Raise the timeout, when installation takes longer
     ssh_timeout = "120m"
