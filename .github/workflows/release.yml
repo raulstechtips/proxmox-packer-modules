@@ -8,8 +8,9 @@
 # Its parent is the previous release of the same module, so the history under
 # the tag also holds no other module.
 #
-# A caller checks out the tag and uses modules/<module>/, as before. A tag is
-# permanent. Nothing here moves or deletes a tag.
+# A var file in proxmox-packer-config pins the tag with
+# module = "<module>/v<version>". The build checks out the tag and uses
+# modules/<module>/. A tag is permanent. Nothing here moves or deletes a tag.
 name: release
 
 on:
@@ -149,10 +150,10 @@ jobs:
               echo "This is the first release of \`$MOD\`."
             fi
             echo ""
-            echo "Pin it in the checkout of this repository:"
+            echo "Pin it in a var file in proxmox-packer-config:"
             echo ""
-            echo '```yaml'
-            echo "ref: $TAG"
+            echo '```hcl'
+            echo "module = \"$TAG\""
             echo '```'
           } > "$NOTES"
 
