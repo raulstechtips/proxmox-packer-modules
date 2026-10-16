@@ -1,8 +1,9 @@
 ---
 # Release one module. DEVSECOPS-131. Manual start only, from main.
 #
-# Give a folder in modules/ and a new version X.Y.Z. The job makes the tag
-# <module>/vX.Y.Z on a new commit that holds only modules/<module>/ from
+# Give a folder in modules/ and a new version: X.Y.Z, or X.Y.Z-<label> for a
+# pre-release, for example 1.0.0-rc1. The job makes the tag
+# <module>/v<version> on a new commit that holds only modules/<module>/ from
 # main, and then a GitHub release for that tag. The commit is not on main.
 # Its parent is the previous release of the same module, so the history under
 # the tag also holds no other module.
@@ -19,7 +20,7 @@ on:
         required: true
         type: string
       version:
-        description: "New version, X.Y.Z without v, for example 1.0.0"
+        description: "New version without v: X.Y.Z, or X.Y.Z-<label> for a pre-release. For example 1.0.0, 1.0.0-rc1, 1.0.0-beta.2"
         required: true
         type: string
 
@@ -52,6 +53,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          # X.Y.Z, or X.Y.Z-<label> for a pre-release. The label is a-z, then an
+          # optional number, with an optional dot before it: rc, rc1, rc.1, beta2.
+          SEMVER='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[a-z]+(\.?(0|[1-9][0-9]*))?)?'
+          # Sort versions, lowest first. sort -V puts ~ before the end of a string,
+          # so 1.0.0-rc1 (sorted as 1.0.0~rc1) comes before 1.0.0, and rc9 before rc10.
+          vsort() { sed 's/-/~/' | sort -V | sed 's/~/-/'; }
+
           if [ "$GITHUB_REF" != refs/heads/main ]; then
             echo "::error::Start the release from main. This run is on $GITHUB_REF."
             exit 1
@@ -60,8 +68,8 @@ jobs:
             echo "::error::module must be a folder name in modules/, with only a-z, 0-9 and -."
             exit 1
           fi
-          if ! [[ "$VER" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "::error::version must be X.Y.Z without v, for example 1.0.0."
+          if ! [[ "$VER" =~ ^$SEMVER$ ]]; then
+            echo "::error::version must be X.Y.Z, or X.Y.Z-<label> for a pre-release, without v. For example 1.0.0, 1.0.0-rc1 or 1.0.0-beta.2."
             exit 1
           fi
           SHA=$(git rev-parse HEAD)
@@ -77,8 +85,8 @@ jobs:
 
           # The released versions of this module, lowest first.
           RELEASED=$(git ls-remote --tags --refs origin "refs/tags/$MOD/v*" \
-            | sed -nE "s#^[0-9a-f]+\trefs/tags/$MOD/v([0-9]+\.[0-9]+\.[0-9]+)\$#\1#p" \
-            | sort -V)
+            | sed -nE "s#^[0-9a-f]+\trefs/tags/$MOD/v($SEMVER)\$#\1#p" \
+            | vsort)
 
           if grep -qxF -- "$VER" <<<"$RELEASED"; then
             # The tag exists. A re-run after a failed release comes here.
@@ -94,7 +102,7 @@ jobs:
             echo "::notice::$TAG already exists, with this content, but it has no release. The job makes only the release."
           else
             LATEST=$(tail -n 1 <<<"$RELEASED")
-            if [ -n "$LATEST" ] && [ "$(printf '%s\n' "$LATEST" "$VER" | sort -V | tail -n 1)" != "$VER" ]; then
+            if [ -n "$LATEST" ] && [ "$(printf '%s\n' "$LATEST" "$VER" | vsort | tail -n 1)" != "$VER" ]; then
               echo "::error::$VER is lower than $LATEST, the latest release of $MOD."
               exit 1
             fi
@@ -110,7 +118,8 @@ jobs:
                 echo "::error::$PREV_TAG holds more than modules/$MOD/, so this workflow did not make it. Make tags only with this workflow."
                 exit 1
               fi
-              if [ "$(git rev-parse "$PREV^{tree}")" = "$ROOT" ]; then
+              # A final release may have the same content as the pre-release before it.
+              if [ "$(git rev-parse "$PREV^{tree}")" = "$ROOT" ] && [[ "$LATEST" != *-* || "$VER" == *-* ]]; then
                 echo "::error::modules/$MOD did not change since $PREV_TAG. There is nothing to release."
                 exit 1
               fi
@@ -147,8 +156,13 @@ jobs:
             echo '```'
           } > "$NOTES"
 
+          # A version with a label becomes a GitHub pre-release.
+          PRE=()
+          if [[ "$VER" == *-* ]]; then
+            PRE=(--prerelease)
+          fi
           # --verify-tag: if the tag is missing, gh must not make a new tag on main.
-          if ! gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES"; then
+          if ! gh release create "$TAG" --verify-tag "${PRE[@]}" --title "$TAG" --notes-file "$NOTES"; then
             echo "::error::The tag $TAG is on GitHub, but the release failed. Re-run this job to make the release."
             exit 1
           fi
