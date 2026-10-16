@@ -1,0 +1,156 @@
+---
+# Release one module. DEVSECOPS-131. Manual start only, from main.
+#
+# Give a folder in modules/ and a new version X.Y.Z. The job makes the tag
+# <module>/vX.Y.Z on a new commit that holds only modules/<module>/ from
+# main, and then a GitHub release for that tag. The commit is not on main.
+# Its parent is the previous release of the same module, so the history under
+# the tag also holds no other module.
+#
+# A caller checks out the tag and uses modules/<module>/, as before. A tag is
+# permanent. Nothing here moves or deletes a tag.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: "Folder in modules/, for example ubuntu-24-04-template"
+        required: true
+        type: string
+      version:
+        description: "New version, X.Y.Z without v, for example 1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false     # never cancel a run that is half way through tagging
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write           # needed to push the tag and to make the release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create the tag and the release
+        env:
+          MOD: ${{ inputs.module }}
+          VER: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GIT_AUTHOR_NAME: "github-actions[bot]"
+          GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com"
+          GIT_COMMITTER_NAME: "github-actions[bot]"
+          GIT_COMMITTER_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com"
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Start the release from main. This run is on $GITHUB_REF."
+            exit 1
+          fi
+          if ! [[ "$MOD" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "::error::module must be a folder name in modules/, with only a-z, 0-9 and -."
+            exit 1
+          fi
+          if ! [[ "$VER" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::version must be X.Y.Z without v, for example 1.0.0."
+            exit 1
+          fi
+          SHA=$(git rev-parse HEAD)
+          if [ "$(git cat-file -t "$SHA:modules/$MOD" 2>/dev/null)" != tree ]; then
+            echo "::error::modules/$MOD is not a folder on main."
+            exit 1
+          fi
+          TAG="$MOD/v$VER"
+
+          # A root tree that holds only modules/$MOD/.
+          MODULES=$(printf '040000 tree %s\t%s\n' "$(git rev-parse "$SHA:modules/$MOD")" "$MOD" | git mktree)
+          ROOT=$(printf '040000 tree %s\tmodules\n' "$MODULES" | git mktree)
+
+          # The released versions of this module, lowest first.
+          RELEASED=$(git ls-remote --tags --refs origin "refs/tags/$MOD/v*" \
+            | sed -nE "s#^[0-9a-f]+\trefs/tags/$MOD/v([0-9]+\.[0-9]+\.[0-9]+)\$#\1#p" \
+            | sort -V)
+
+          if grep -qxF -- "$VER" <<<"$RELEASED"; then
+            # The tag exists. A re-run after a failed release comes here.
+            git fetch --quiet --no-tags --depth=1 origin "+refs/tags/$TAG:refs/tags/$TAG"
+            if [ "$(git rev-parse "refs/tags/$TAG^{tree}")" != "$ROOT" ]; then
+              echo "::error::$TAG already exists, with other content. A tag never moves. Choose a new version."
+              exit 1
+            fi
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "::notice::$TAG and its release already exist. Nothing to do."
+              exit 0
+            fi
+            echo "::notice::$TAG already exists, with this content, but it has no release. The job makes only the release."
+          else
+            LATEST=$(tail -n 1 <<<"$RELEASED")
+            if [ -n "$LATEST" ] && [ "$(printf '%s\n' "$LATEST" "$VER" | sort -V | tail -n 1)" != "$VER" ]; then
+              echo "::error::$VER is lower than $LATEST, the latest release of $MOD."
+              exit 1
+            fi
+
+            # The parent is the latest release of this module.
+            PARENT=()
+            if [ -n "$LATEST" ]; then
+              PREV_TAG="$MOD/v$LATEST"
+              git fetch --quiet --no-tags --depth=1 origin "+refs/tags/$PREV_TAG:refs/tags/$PREV_TAG"
+              PREV=$(git rev-parse "refs/tags/$PREV_TAG^{commit}")
+              if [ "$(git ls-tree --name-only "$PREV")" != modules ] \
+                || [ "$(git ls-tree --name-only "$PREV:modules")" != "$MOD" ]; then
+                echo "::error::$PREV_TAG holds more than modules/$MOD/, so this workflow did not make it. Make tags only with this workflow."
+                exit 1
+              fi
+              if [ "$(git rev-parse "$PREV^{tree}")" = "$ROOT" ]; then
+                echo "::error::modules/$MOD did not change since $PREV_TAG. There is nothing to release."
+                exit 1
+              fi
+              PARENT=(-p "$PREV")
+            fi
+
+            RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            MSG=(-m "$TAG" -m "Source: modules/$MOD at $SHA on main." -m "Run: $RUN")
+            COMMIT=$(git commit-tree "${PARENT[@]}" "${MSG[@]}" "$ROOT")
+            git tag -a "${MSG[@]}" "$TAG" "$COMMIT"
+            git push origin "refs/tags/$TAG"
+            echo "::notice::Created $TAG on $COMMIT. Its files:"
+            git ls-tree -r --name-only "$COMMIT"
+          fi
+
+          # The release before $VER, for the link to the changes.
+          PREV_VER=$(awk -v v="$VER" '$0 == v { exit } { p = $0 } END { print p }' <<<"$RELEASED")
+          URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          NOTES="$RUNNER_TEMP/notes.md"
+          {
+            echo "Packer module \`$MOD\`, version \`$VER\`."
+            echo ""
+            echo "Source: \`modules/$MOD\` at [${SHA:0:7}]($URL/commit/$SHA) on \`main\`."
+            if [ -n "$PREV_VER" ]; then
+              echo "Changes since \`$MOD/v$PREV_VER\`: [compare]($URL/compare/$MOD/v$PREV_VER...$TAG)"
+            else
+              echo "This is the first release of \`$MOD\`."
+            fi
+            echo ""
+            echo "Pin it in the checkout of this repository:"
+            echo ""
+            echo '```yaml'
+            echo "ref: $TAG"
+            echo '```'
+          } > "$NOTES"
+
+          # --verify-tag: if the tag is missing, gh must not make a new tag on main.
+          if ! gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES"; then
+            echo "::error::The tag $TAG is on GitHub, but the release failed. Re-run this job to make the release."
+            exit 1
+          fi
+          echo "::notice::Released $TAG."
+          { echo "### Released \`$TAG\`"; echo ""; cat "$NOTES"; } >> "$GITHUB_STEP_SUMMARY"
